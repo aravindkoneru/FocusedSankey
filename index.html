@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>SANKEY Experiment</title>
+<style>
+
+.node rect {
+  cursor: move;
+  fill-opacity: .9;
+  shape-rendering: crispEdges;
+}
+
+.node text {
+  color: black; 
+  pointer-events: none;
+  text-shadow: 0 1px 0 #fff;
+}
+
+.link {
+  fill: none;
+  stroke: #000;
+  stroke-opacity: .2;
+}
+
+.link:hover {
+  stroke-opacity: .5 !important;
+}
+
+/*.container {
+    height: 225px;
+    width: 175px;
+    border:2px solid #000;
+    overflow-y: scroll;
+    overflow-x: hidden;
+}*/
+
+svg {
+    display: block;
+    width: 200%;
+    height: 200%;
+}
+
+</style>
+<body>
+
+<p id="chart">
+
+<script src="http://d3js.org/d3.v3.min.js"></script>
+<script src="sankey.js"></script>
+<script>
+var units = "Widgets";
+
+var margin = {top: 100, right: 50, bottom: 100, left: 50},
+    width = 2040 - margin.left - margin.right,
+    height = 1080 - margin.top - margin.bottom;
+
+var formatNumber = d3.format(",.0f"),    // zero decimal places
+    format = function(d) { return formatNumber(d) + " " + units; },
+    color = d3.scale.category20();
+
+// append the svg canvas to the page
+var svg = d3.select("#chart").append("svg")
+    .attr("width", width + margin.left + margin.right)
+    .attr("height", height + margin.top + margin.bottom)
+  .append("g")
+    .attr("transform", 
+          "translate(" + margin.left + "," + margin.top + ")");
+
+// Set the sankey diagram properties
+var sankey = d3.sankey()
+    .nodeWidth(20)
+    .nodePadding(20)
+    .size([width, height]);
+
+var path = sankey.link();
+
+// load the data
+d3.json("investor_data.json", function(error, graph) {
+
+  sankey
+      .nodes(graph.nodes)
+      .links(graph.links)
+      .layout(32);
+
+// add in the links
+  var link = svg.append("g").selectAll(".link")
+      .data(graph.links)
+      .enter().append("path")
+      .attr("class", "link")
+      .attr("d", path)
+      .attr("id", function(d,i){    
+        d.id = i;   
+        return "link-"+i;   
+      })
+      .style("stroke-width", function(d) { return Math.max(1, d.dy); })
+      .sort(function(a, b) { return b.dy - a.dy; });
+
+// add the link titles
+  link.append("title")
+        .text(function(d) {
+            return d.source.name + " → " + 
+                d.target.name + "\n" + format(d.value); });
+
+// add in the nodes
+  var node = svg.append("g").selectAll(".node")
+      .data(graph.nodes)
+    .enter().append("g")
+      .attr("class", "node")
+      .attr('id', function(d, i){ 
+        d.id = i;
+        return "node-" + i; 
+      })
+      .attr("transform", function(d) { 
+          return "translate(" + d.x + "," + d.y + ")"; })
+      .on("click",highlight_node_links)
+    .call(d3.behavior.drag()
+      .origin(function(d) { return d; })
+      .on("dragstart", function() { 
+          this.parentNode.appendChild(this); })
+      .on("drag", dragmove));
+
+// add the rectangles for the nodes
+  node.append("rect")
+      .attr("height", function(d) { return d.dy; })
+      .attr("width", sankey.nodeWidth())
+      .style("fill", function(d) { 
+          return d.color = color(d.name.replace(/ .*/, "")); })
+      .style("stroke", function(d) { 
+          return d3.rgb(d.color).darker(2); })
+    .append("title")
+      .text(function(d) { 
+          return d.name + "\n" + format(d.value); });
+
+// add in the title for the nodes
+  node.append("text")
+      .attr("x", -6)
+      .attr("y", function(d) { return d.dy / 2; })
+      .attr("dy", ".35em")
+      .attr("text-anchor", "end")
+      .attr("transform", null)
+      .text(function(d) { return d.name; })
+    .filter(function(d) { return d.x < width / 2; })
+      .attr("x", 6 + sankey.nodeWidth())
+      .attr("text-anchor", "start");
+
+// the function for moving the nodes
+  function dragmove(d) {
+    d3.select(this).attr("transform", 
+        "translate(" + d.x + "," + (
+                d.y = Math.max(0, Math.min(height - d.dy, d3.event.y))
+            ) + ")");
+    sankey.relayout();
+    link.attr("d", path);
+  }
+
+  function highlight_node_links(node,i){
+
+    var nodes_to_visit=[],
+        dfs_next_nodes=[];
+
+    var stroke_opacity = 0;
+    var node_opacity = 0;
+    var link_opacity = 0;
+    //unhighlight path
+    if( d3.select(this).attr("data-clicked") == "1" ){
+      d3.select(this).attr("data-clicked","0");
+      stroke_opacity = 0.2;
+      node_opacity = 1;
+      link_opacity = 0.2;
+    }else{//highlight path
+      d3.select(this).attr("data-clicked","1");
+      stroke_opacity = 0.25;
+      node_opacity = 0.01;
+      link_opacity = 0.01;
+    }
+
+    d3.selectAll(".node")
+        .each(function(d,i){
+          d3.select(this).style("opacity", node_opacity);
+        });
+
+    d3.selectAll(".link")
+      .each(function(d,i){
+        d3.select(this).style("stroke-opacity", link_opacity);
+      })
+
+    var traverse = [{
+                      linkType : "sourceLinks",
+                      nodeType : "target"
+                    },{
+                      linkType : "targetLinks",
+                      nodeType : "source"
+                    }];
+
+    traverse.forEach(function(step){
+      //forward 
+      node[step.linkType].forEach(function(link) {
+        nodes_to_visit.push(link[step.nodeType]);
+        highlight_link(link.id, stroke_opacity);
+        highlight_node(link.source.id, 1);
+        highlight_node(link.target.id, 1);
+      });
+
+      //backward
+      while (nodes_to_visit.length) {
+        dfs_next_nodes = [];
+        nodes_to_visit.forEach(function(node) {
+          node[step.linkType].forEach(function(link) {
+            dfs_next_nodes.push(link[step.nodeType]);
+            highlight_link(link.id, stroke_opacity);
+            highlight_node(link.source.id, 1);
+            highlight_node(link.target.id, 1);
+          });
+        });
+        nodes_to_visit = dfs_next_nodes;
+      }
+
+    });
+  }
+
+  function highlight_node(id){
+    d3.select("#node-"+id).style("opacity", 1);
+  }
+
+  function highlight_link(id,opacity){
+      d3.select("#link-"+id).style("stroke-opacity", opacity);
+  }
+});
+
+</script>
+
+</body>
+</html>
